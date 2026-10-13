@@ -47,14 +47,23 @@ jobs:
           git branch -f "$BR" origin/main
           git switch "$BR"
 
-          if git merge --no-edit "upstream/$DEF"; then
-            SUFFIX=""
-            BODY="Automated merge of \`$UP@$DEF\` into \`main\`. Merged cleanly — review and merge."
-          else
-            git add -A
-            git commit --no-edit -m "merge upstream/$DEF (conflicts to resolve)"
+          # Merge without committing, so we can drop upstream's workflow changes first: we keep our
+          # own CI/release/sync workflows, and the default GITHUB_TOKEN can't push .github/workflows
+          # anyway (needs the `workflows` scope).
+          set +e
+          git merge --no-commit --no-edit "upstream/$DEF"
+          set -e
+          git checkout origin/main -- .github/workflows 2>/dev/null || true
+          CONFLICTS=$(git ls-files -u | wc -l)
+          git add -A
+          git commit --no-edit -m "merge upstream/$DEF"
+
+          if [ "$CONFLICTS" -gt 0 ]; then
             SUFFIX=" (conflicts)"
-            BODY="Automated merge of \`$UP@$DEF\` into \`main\`. **Has conflicts** — the branch keeps the conflict markers; resolve them before merging."
+            BODY="Automated merge of \`$UP@$DEF\` into \`main\` (upstream workflows skipped). **Has conflicts** — the branch keeps the conflict markers; resolve them before merging."
+          else
+            SUFFIX=""
+            BODY="Automated merge of \`$UP@$DEF\` into \`main\` (upstream workflows skipped). Merged cleanly — review and merge."
           fi
 
           git push -f origin "$BR"
