@@ -1,7 +1,9 @@
 name: Sync upstream
 
-# Fork: brings the upstream (storytold) main into this fork's main every day (GitHub's "Sync fork"),
-# keeping the fork's own features. If the merge conflicts, the run fails and GitHub emails the owner.
+# Fork: brings the upstream (storytold) default branch into this fork as a reviewable PR, instead
+# of merging straight into main. The old "merge-upstream" API failed every day because the fork
+# always conflicts with its own features (updater, labs workflows, rebrand). A PR surfaces the
+# changes and conflicts for a human to resolve. See LABS-165.
 on:
   schedule:
     - cron: "40 6 * * *"
@@ -9,12 +11,56 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Merge upstream main
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Open (or update) a PR with upstream's changes
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api -X POST "repos/${{ github.repository }}/merge-upstream" -f branch=main
+        run: |
+          set -euo pipefail
+          UP=$(gh repo view --json parent -q '.parent.owner.login + "/" + .parent.name')
+          if [ -z "$UP" ] || [ "$UP" = "/" ]; then
+            echo "No parent repo — nothing to sync."
+            exit 0
+          fi
+          DEF=$(gh repo view "$UP" --json defaultBranchRef -q .defaultBranchRef.name)
+          echo "Upstream: $UP@$DEF"
+          git remote add upstream "https://github.com/$UP.git"
+          git fetch --no-tags upstream "$DEF"
+
+          if git merge-base --is-ancestor "upstream/$DEF" HEAD; then
+            echo "Already up to date with upstream."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BR="sync/upstream"
+          git branch -f "$BR" origin/main
+          git switch "$BR"
+
+          if git merge --no-edit "upstream/$DEF"; then
+            SUFFIX=""
+            BODY="Automated merge of \`$UP@$DEF\` into \`main\`. Merged cleanly — review and merge."
+          else
+            git add -A
+            git commit --no-edit -m "merge upstream/$DEF (conflicts to resolve)"
+            SUFFIX=" (conflicts)"
+            BODY="Automated merge of \`$UP@$DEF\` into \`main\`. **Has conflicts** — the branch keeps the conflict markers; resolve them before merging."
+          fi
+
+          git push -f origin "$BR"
+
+          if gh pr view "$BR" --json state -q .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$BR" --title "Sync upstream$SUFFIX" --body "$BODY"
+          else
+            gh pr create --base main --head "$BR" --title "Sync upstream$SUFFIX" --body "$BODY"
+          fi
