@@ -171,29 +171,84 @@ fn page_dict(doc: &Document, page: usize) -> Result<printcraft_model::Page, Edit
     printcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
 
-fn fill_color(fill: &[Op]) -> [f64; 3] {
-    let Some(op) = fill.iter().rev().find(|op| matches!(op.op.as_slice(), b"g" | b"rg" | b"k")) else {
-        return [0.0, 0.0, 0.0];
-    };
-    match op.op.as_slice() {
-        b"g" => {
-            let v = op.operands.first().and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
-            [v, v, v]
-        }
-        b"rg" => [
-            op.operands.first().and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
-            op.operands.get(1).and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
-            op.operands.get(2).and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
-        ],
-        b"k" => {
-            let c = op.operands.first().and_then(Object::as_f64).unwrap_or(0.0);
-            let m = op.operands.get(1).and_then(Object::as_f64).unwrap_or(0.0);
-            let y = op.operands.get(2).and_then(Object::as_f64).unwrap_or(0.0);
-            let k = op.operands.get(3).and_then(Object::as_f64).unwrap_or(0.0);
-            [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)]
-        }
-        _ => [0.0, 0.0, 0.0],
+fn gray(v: f64) -> [f64; 3] {
+    let v = v.clamp(0.0, 1.0);
+    [v, v, v]
+}
+
+fn cmyk(c: f64, m: f64, y: f64, k: f64) -> [f64; 3] {
+    [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)]
+}
+
+/// Map the numeric operands of an `sc`/`scn` to RGB by how many there are: 1 = gray, 3 = RGB,
+/// 4 = CMYK. Used for the device-equivalent colour spaces (`ICCBased`, `CalRGB`/`CalGray`,
+/// `DeviceRGB`/`Gray`/`CMYK`), where the operands already are the device colour.
+fn by_count(nums: &[f64]) -> Option<[f64; 3]> {
+    match nums {
+        [v] => Some(gray(*v)),
+        [r, g, b] => Some([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)]),
+        [c, m, y, k] => Some(cmyk(*c, *m, *y, *k)),
+        _ => None,
     }
+}
+
+/// RGB of an `sc`/`scn` set in the named colour space `name`, looked up in the page's
+/// `/ColorSpace` resources. Resolves to the device colour for `ICCBased`, `Cal*` and the device
+/// spaces; `Separation`/`DeviceN`/`Indexed`/`Lab`/`Pattern` need a tint transform or lookup we
+/// don't evaluate here, so they keep the black fallback.
+fn scn_rgb(doc: &Document, cs_res: &Dict, name: &[u8], nums: &[f64]) -> Option<[f64; 3]> {
+    match name {
+        b"DeviceGray" | b"G" => nums.first().map(|v| gray(*v)),
+        b"DeviceRGB" | b"RGB" => by_count(nums).filter(|_| nums.len() == 3),
+        b"DeviceCMYK" | b"CMYK" => by_count(nums).filter(|_| nums.len() == 4),
+        b"Pattern" => None,
+        _ => {
+            let cs = cs_res.get(name).map(|o| doc.resolve(o))?;
+            if let Some(alias) = cs.as_name() {
+                return scn_rgb(doc, cs_res, alias, nums);
+            }
+            let arr = cs.as_array()?;
+            match arr.first().and_then(Object::as_name) {
+                Some(b"ICCBased") | Some(b"CalRGB") | Some(b"CalGray") => by_count(nums),
+                _ => None, // Separation, DeviceN, Indexed, Lab, Pattern: unresolved here
+            }
+        }
+    }
+}
+
+/// The current fill colour as RGB, from the fill-setting operators that were in effect. Handles
+/// the device operators (`g`, `rg`, `k`) directly and `cs` + `sc`/`scn` via [`scn_rgb`]. Falls
+/// back to black when no colour was set or the colour space can't be resolved.
+fn fill_color(doc: &Document, cs_res: &Dict, fill: &[Op]) -> [f64; 3] {
+    let mut rgb = [0.0, 0.0, 0.0];
+    let mut cs_name: Option<Vec<u8>> = None;
+    for op in fill {
+        match op.op.as_slice() {
+            b"g" => {
+                rgb = gray(op.num(0).unwrap_or(0.0));
+                cs_name = None;
+            }
+            b"rg" => {
+                rgb = [op.num(0).unwrap_or(0.0).clamp(0.0, 1.0), op.num(1).unwrap_or(0.0).clamp(0.0, 1.0), op.num(2).unwrap_or(0.0).clamp(0.0, 1.0)];
+                cs_name = None;
+            }
+            b"k" => {
+                rgb = cmyk(op.num(0).unwrap_or(0.0), op.num(1).unwrap_or(0.0), op.num(2).unwrap_or(0.0), op.num(3).unwrap_or(0.0));
+                cs_name = None;
+            }
+            b"cs" => cs_name = op.name(0).map(<[u8]>::to_vec),
+            b"sc" | b"scn" => {
+                if let Some(name) = &cs_name {
+                    let nums: Vec<f64> = op.operands.iter().filter_map(Object::as_f64).collect();
+                    if let Some(c) = scn_rgb(doc, cs_res, name, &nums) {
+                        rgb = c;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    rgb
 }
 
 /// The text-showing operators of one stream with their text, font, box and baseline.
@@ -388,6 +443,7 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+    let cs_res = res.get(b"ColorSpace").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()).unwrap_or_default();
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
     for (si, (_, data)) in content_streams(doc, &p.dict).into_iter().enumerate() {
@@ -399,7 +455,10 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
                 bt == s.bt
                     && lines.last().is_some_and(|l| l.font.as_bytes() == s.font.as_slice())
                     && lines.last().is_some_and(|l| {
-                        (s.size - l.size).abs() < 0.01 && s.bold == l.bold && s.italic == l.italic && fill_color(&s.state.fill) == l.color
+                        (s.size - l.size).abs() < 0.01
+                            && s.bold == l.bold
+                            && s.italic == l.italic
+                            && fill_color(doc, &cs_res, &s.state.fill) == l.color
                     })
                     && (s.baseline - base).abs() < size * 0.3
                     && s.start_x > end - size
@@ -414,7 +473,7 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
                 l.rect = [l.rect[0].min(s.rect[0]), l.rect[1].min(s.rect[1]), l.rect[2].max(s.rect[2]), l.rect[3].max(s.rect[3])];
                 l.ops.push(s.op);
                 l.decodable &= s.decodable;
-                l.color = fill_color(&s.state.fill);
+                l.color = fill_color(doc, &cs_res, &s.state.fill);
             } else {
                 lines.push(TextLine {
                     text: s.text.clone(),
@@ -424,7 +483,7 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
                     size: s.size,
                     bold: s.bold,
                     italic: s.italic,
-                    color: fill_color(&s.state.fill),
+                    color: fill_color(doc, &cs_res, &s.state.fill),
                     decodable: s.decodable,
                     stream: si,
                     ops: vec![s.op],
