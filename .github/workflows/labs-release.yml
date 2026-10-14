@@ -1,14 +1,23 @@
 name: Labs release
 
-# Proddyt Switch: builds the app for Windows, Linux and macOS and publishes a GitHub Release
-# (portable archives + a Windows installer) whenever main has new commits. Runs on pushes to main,
-# every day after the upstream sync, or by hand. The app's updater reads these releases.
+# Proddyt Switch: builds on our self-hosted runner (proddyt server) to skip the free-tier queue.
+# Linux is built natively; Windows is cross-compiled with cargo-xwin. macOS is not built here (no
+# Mac hardware — see LABS-154). The Windows installer (Inno Setup) is the only step that still runs
+# on a GitHub-hosted Windows runner, and only when publishing a release.
+#
+#   - push to main / schedule / dispatch with release=true  -> publish release (portable + installer)
+#   - dispatch with release=false (default)                 -> build portable only, no release
 on:
   push:
     branches: [main]
   schedule:
     - cron: "30 7 * * *"
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Publicar release (portable + instalador). Desmarcado = só portable de teste."
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -27,6 +36,7 @@ jobs:
       build: ${{ steps.c.outputs.build }}
       app: ${{ steps.c.outputs.app }}
       tag: ${{ steps.c.outputs.tag }}
+      is_release: ${{ steps.c.outputs.is_release }}
     steps:
       - uses: actions/checkout@v4
       - id: c
@@ -38,6 +48,12 @@ jobs:
           ver=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           sha=$(git rev-parse --short HEAD)
           echo "tag=v${ver}-labs.$(date -u +%Y%m%d).${sha}" >> "$GITHUB_OUTPUT"
+          # release on push/schedule, or on a dispatch that asked for it; a plain dispatch is a test
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.release }}" != "true" ]; then
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          fi
           last=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -z "$last" ] || ! echo "$last" | grep -q "$sha"; then
             echo "build=true" >> "$GITHUB_OUTPUT"
@@ -48,41 +64,60 @@ jobs:
   build:
     needs: check
     if: needs.check.outputs.build == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: windows-latest, plat: windows-x64 }
-          - { os: ubuntu-latest, plat: linux-x64 }
-          - { os: macos-latest, plat: macos-arm64 }
-    runs-on: ${{ matrix.os }}
+    runs-on: [self-hosted, proddyt]
     steps:
       - uses: actions/checkout@v4
-      - name: Linux system dependencies (egui/winit/rfd)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libssl-dev libgtk-3-dev libasound2-dev pkg-config
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Build
-        shell: bash
-        run: cargo build --release -p "${{ needs.check.outputs.app }}" -p "${{ needs.check.outputs.app }}-cli"
-      - name: Package (portable)
+      - name: Build Linux (native) + Windows (cargo-xwin)
         shell: bash
         run: |
-          app="${{ needs.check.outputs.app }}"; out="dist/${app}-${{ matrix.plat }}"
-          mkdir -p "$out"
-          ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
-          cp "target/release/${app}${ext}" "target/release/${app}-cli${ext}" "$out/"
-          cp LICENSE-MIT LICENSE-APACHE "$out/" 2>/dev/null || true
-          if [ -f NOTICE ]; then cp NOTICE "$out/"; fi
-          echo "${{ needs.check.outputs.tag }}" > "$out/VERSION"
+          source "$HOME/.cargo/env"
+          app="${{ needs.check.outputs.app }}"
+          cargo build --release -p "$app" -p "$app-cli"
+          cargo xwin build --release --target x86_64-pc-windows-msvc -p "$app" -p "$app-cli"
+      - name: Package portables
+        shell: bash
+        run: |
+          app="${{ needs.check.outputs.app }}"; tag="${{ needs.check.outputs.tag }}"
+          mkdir -p dist
+          pack() { # <platdir> <srcdir> <ext>
+            local out="dist/$1" src="$2" ext="$3"
+            mkdir -p "$out"
+            cp "$src/$app$ext" "$src/$app-cli$ext" "$out/"
+            cp LICENSE-MIT LICENSE-APACHE "$out/" 2>/dev/null || true
+            [ -f NOTICE ] && cp NOTICE "$out/" || true
+            echo "$tag" > "$out/VERSION"
+          }
+          pack "$app-linux-x64"   target/release                            ""
+          pack "$app-windows-x64" target/x86_64-pc-windows-msvc/release     ".exe"
           cd dist
-          if [ "${{ runner.os }}" = "Windows" ]; then 7z a -tzip "${app}-${{ matrix.plat }}-portable.zip" "${app}-${{ matrix.plat }}" > /dev/null
-          else tar -czf "${app}-${{ matrix.plat }}-portable.tar.gz" "${app}-${{ matrix.plat }}"; fi
+          tar -czf "$app-linux-x64-portable.tar.gz" "$app-linux-x64"
+          python3 -c "import shutil; shutil.make_archive('$app-windows-x64-portable','zip','.','$app-windows-x64')"
+      - name: Upload portables + the unpacked Windows dir (for the installer)
+        uses: actions/upload-artifact@v4
+        with:
+          name: portables
+          path: |
+            dist/*-portable.tar.gz
+            dist/*-portable.zip
+          retention-days: 14
+      - name: Upload Windows dir
+        if: needs.check.outputs.is_release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-dir
+          path: dist/${{ needs.check.outputs.app }}-windows-x64
+          retention-days: 1
+
+  installer:
+    needs: [check, build]
+    if: needs.check.outputs.build == 'true' && needs.check.outputs.is_release == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-dir
+          path: dist/${{ needs.check.outputs.app }}-windows-x64
       - name: Windows installer (Inno Setup)
-        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $app = "${{ needs.check.outputs.app }}"; $tag = "${{ needs.check.outputs.tag }}"
@@ -115,15 +150,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.plat }}
-          path: |
-            dist/*.zip
-            dist/*.tar.gz
-            dist/*-setup.exe
+          name: installer
+          path: dist/*-setup.exe
           retention-days: 14
 
   release:
-    needs: [check, build]
+    needs: [check, build, installer]
+    if: needs.check.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -135,9 +168,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Only the packages: an artifact may carry folders, and gh can't upload a directory.
           mapfile -t files < <(find assets -type f \( -name '*-portable.zip' -o -name '*-portable.tar.gz' -o -name '*-setup.exe' \))
           printf '%s\n' "${files[@]}"
           gh release create "${{ needs.check.outputs.tag }}" "${files[@]}" --target "$GITHUB_SHA" \
             --title "${{ needs.check.outputs.tag }}" \
-            --notes "Build automático do Proddyt Switch ($(git rev-parse --short HEAD)). Mudanças: suas features (PRs deste fork) + o que veio do projeto original (sync diário)."
+            --notes "Build automático do Proddyt Switch ($(git rev-parse --short HEAD)). Linux/Windows no runner próprio; instalador no GitHub. Mudanças: features deste fork + sync do upstream."
