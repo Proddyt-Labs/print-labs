@@ -18,7 +18,7 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
     let saida = rolagem.show(ui, |ui| {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 36, right: 36, top: 28, bottom: 28 }).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Welcome to Studio Print").font(theme::semibold(24.0)));
+                ui.label(egui::RichText::new("Welcome to Print Labs").font(theme::semibold(24.0)));
             });
             ui.label(
                 egui::RichText::new("An open-source PDF workbench — local, private, and scriptable.").color(t.text_muted).font(theme::regular(14.0)),
@@ -126,7 +126,7 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
             ui.add_space(8.0);
             recent_folders(app, ui, &t);
             if app.recent.is_empty() && app.recent_folders.is_empty() {
-                ui.label(egui::RichText::new("Files you open in Studio Print appear here. Drop a PDF anywhere to open it. Drag a file or folder onto a collection to add it.").color(t.text_muted));
+                ui.label(egui::RichText::new("Files you open in Print Labs appear here. Drop a PDF anywhere to open it. Drag a file or folder onto a collection to add it.").color(t.text_muted));
             }
             let mut open = None;
             for r in &app.recent {
@@ -166,7 +166,7 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
             ui.add_space(20.0);
             widgets::section_title(ui, "Privacy");
             ui.label(
-                egui::RichText::new("Studio Print works offline. No telemetry, no account, and no cloud processing unless you add a provider.")
+                egui::RichText::new("Print Labs works offline. No telemetry, no account, and no cloud processing unless you add a provider.")
                     .color(t.text_muted),
             );
         });

@@ -1,4 +1,4 @@
-//! Asks GitHub for the Studio Print releases (Help ▸ Check for updates; Proddyt Studio, LABS-156),
+//! Asks GitHub for the Print Labs releases (Help ▸ Check for updates; Proddyt Switch, LABS-156),
 //! tells which release this copy is and how it was installed, and on Windows updates it by itself:
 //! once the user says yes, the new installer or portable archive is downloaded, and a small
 //! PowerShell helper waits for the app to quit, installs it (the installer showing its progress, or
