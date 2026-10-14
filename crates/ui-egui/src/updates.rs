@@ -1,4 +1,4 @@
-//! Updates (Proddyt Switch, LABS-156): the fork's releases, a notice when a newer one is out, and a
+//! Updates (Proddyt Studio, LABS-156): the fork's releases, a notice when a newer one is out, and a
 //! dialog to pick a version and download it.
 //!
 //! The desktop app supplies how to ask ([`PrintCraftApp::update_source`]) and what is installed
@@ -16,7 +16,7 @@ use egui::{Align, Align2, Layout, vec2};
 
 use crate::{PrintCraftApp, theme, widgets};
 
-/// Where every Print Labs release is listed.
+/// Where every Studio Print release is listed.
 pub const RELEASES_PAGE: &str = "https://github.com/Proddyt-Labs/print-labs/releases";
 /// Prefix every downloadable file of a release must have.
 pub const DOWNLOADS: &str = "https://github.com/Proddyt-Labs/print-labs/releases/download/";
@@ -355,7 +355,7 @@ fn notice(app: &mut PrintCraftApp, ctx: &egui::Context) {
             ui.label(egui::RichText::new("Update available").font(theme::semibold(16.0)));
         });
         ui.add_space(8.0);
-        ui.label(egui::RichText::new(format!("Print Labs {} is available.", short(&newest.version))).strong());
+        ui.label(egui::RichText::new(format!("Studio Print {} is available.", short(&newest.version))).strong());
         ui.label(egui::RichText::new(format!("You have {}. Update now?", short(&app.installed_version))).color(t.text_muted));
         ui.add_space(12.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -424,9 +424,9 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
             Check::Done(Ok(list)) => {
                 let fresh = newer(list, &current);
                 if let Some(newest) = fresh.first() {
-                    ui.label(egui::RichText::new(format!("Print Labs {} is available.", short(&newest.version))).strong());
+                    ui.label(egui::RichText::new(format!("Studio Print {} is available.", short(&newest.version))).strong());
                 } else {
-                    ui.label(format!("Print Labs {} is up to date.", short(&current)));
+                    ui.label(format!("Studio Print {} is up to date.", short(&current)));
                 }
                 ui.label(egui::RichText::new(format!("You have {}.", short(&current))).color(t.text_muted));
                 ui.add_space(8.0);
@@ -448,8 +448,8 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 ui.label(
                     egui::RichText::new(match (install, can_apply) {
                         (Install::Dev, _) => "Built from source: the release page is opened.",
-                        (_, true) => "Print Labs downloads this version, closes and reopens updated.",
-                        (Install::Installed, false) => "Downloads the installer: close Print Labs and run it to update.",
+                        (_, true) => "Studio Print downloads this version, closes and reopens updated.",
+                        (Install::Installed, false) => "Downloads the installer: close Studio Print and run it to update.",
                         (Install::Portable, false) => "This is the portable copy: the new archive is downloaded; unpack it over this folder.",
                     })
                     .color(t.text_muted)
@@ -472,7 +472,7 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 }
             }
         }
-        ui.checkbox(&mut app.updates.at_start, "Update automatically when Print Labs starts");
+        ui.checkbox(&mut app.updates.at_start, "Update automatically when Studio Print starts");
         ui.add_space(6.0);
         ui.label(egui::RichText::new("Asks GitHub for the releases. Nothing is installed automatically.").color(t.text_muted).small());
         ui.add_space(12.0);
@@ -540,14 +540,14 @@ fn applying(app: &mut PrintCraftApp, ctx: &egui::Context) {
                     } else {
                         ui.spinner();
                     }
-                    ui.label(egui::RichText::new(format!("Updating Print Labs to {}", short(&version))).strong());
+                    ui.label(egui::RichText::new(format!("Updating Studio Print to {}", short(&version))).strong());
                 });
                 if ready {
-                    ui.label(egui::RichText::new("Save your work: Print Labs closes and reopens updated.").color(t.text_muted));
+                    ui.label(egui::RichText::new("Save your work: Studio Print closes and reopens updated.").color(t.text_muted));
                     ui.add_space(6.0);
                     quit = widgets::pill_button(ui, "Close and update", true).clicked();
                 } else {
-                    ui.label(egui::RichText::new("Downloading. Print Labs reopens by itself when it is done.").color(t.text_muted));
+                    ui.label(egui::RichText::new("Downloading. Studio Print reopens by itself when it is done.").color(t.text_muted));
                 }
             });
         });
