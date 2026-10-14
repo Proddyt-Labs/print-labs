@@ -120,7 +120,7 @@ fn a_start_up_check_shows_a_notice_that_opens_the_dialog() {
     let (mut h, calls) = harness_with(Ok(vec![NEW, MID, OLD]), MID, Install::Portable, "{}");
     settle(&mut h);
     assert_eq!(calls.load(Ordering::SeqCst), 1, "one check at start");
-    h.get_by_label_contains("Print Labs 0.3.0-labs.20261010.abc1234 is available");
+    h.get_by_label_contains("Studio Print 0.3.0-labs.20261010.abc1234 is available");
     // No installer hook here: Update opens the dialog with the download.
     h.get_by_label("Update").click();
     settle(&mut h);
@@ -163,7 +163,7 @@ fn no_start_up_check_when_turned_off() {
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    h.get_by_label_contains("Print Labs 0.3.0-labs.20261010.abc1234 is available.");
+    h.get_by_label_contains("Studio Print 0.3.0-labs.20261010.abc1234 is available.");
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn a_newer_release_is_asked_about_and_installed_on_yes() {
     h.get_by_label("Update").click();
     settle(&mut h);
     assert_eq!(*seen.lock().unwrap(), vec![(NEW.to_string(), Install::Installed)]);
-    h.get_by_label_contains("Updating Print Labs to 0.3.0-labs.20261010.abc1234");
+    h.get_by_label_contains("Updating Studio Print to 0.3.0-labs.20261010.abc1234");
 }
 
 #[test]
@@ -259,7 +259,7 @@ fn a_skipped_or_dev_build_is_not_installed_and_a_failure_falls_back_to_the_dialo
     h.get_by_label("Update").click();
     settle(&mut h);
     assert_eq!(seen.lock().unwrap().len(), 1);
-    h.get_by_label_contains("Print Labs 0.3.0-labs.20261010.abc1234 is available.");
+    h.get_by_label_contains("Studio Print 0.3.0-labs.20261010.abc1234 is available.");
 }
 
 #[test]
