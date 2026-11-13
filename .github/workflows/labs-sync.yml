@@ -1,0 +1,72 @@
+name: Labs sync
+
+# Proddyt Studio: merges the upstream default branch into main every day.
+# - The fork's .github/workflows always stays ours (upstream workflows are dropped), so the
+#   default GITHUB_TOKEN can push the merge.
+# - Clean merge: pushed straight to main, then Labs release is dispatched.
+# - Conflict: the merge (with conflict markers) goes to branch sync/upstream and a PR is opened;
+#   main stays untouched until someone resolves it.
+#
+# Molde: Proddyt-Labs/switch-tools/workflows/labs-sync.yml (copy to each fork, don't edit there).
+on:
+  schedule:
+    - cron: "40 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: labs-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Merge upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          UP=$(gh repo view --json parent -q '.parent.owner.login + "/" + .parent.name')
+          [ -n "$UP" ] && [ "$UP" != "/" ] || { echo "no parent repo"; exit 0; }
+          DEF=$(gh repo view "$UP" --json defaultBranchRef -q .defaultBranchRef.name)
+          git remote add upstream "https://github.com/$UP.git"
+          git fetch --no-tags upstream "$DEF"
+          if git merge-base --is-ancestor "upstream/$DEF" HEAD; then
+            echo "already up to date with $UP@$DEF"; exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          PRE=$(git rev-parse HEAD)
+          set +e
+          git merge --no-commit --no-ff "upstream/$DEF"
+          set -e
+          # Keep our workflows exactly as they were (drop upstream's adds, edits and deletes).
+          git rm -r -q --cached --ignore-unmatch .github/workflows
+          rm -rf .github/workflows
+          git checkout "$PRE" -- .github/workflows
+          CONFLICTS=$(git diff --name-only --diff-filter=U)
+          git add -A
+          git commit -q --no-edit -m "Merge upstream $UP@$DEF"
+          if [ -z "$CONFLICTS" ]; then
+            git push origin HEAD:main
+            gh workflow run labs-release.yml --ref main
+            echo "merged cleanly; release dispatched"
+          else
+            echo "conflicts:"; echo "$CONFLICTS"
+            git push -f origin HEAD:refs/heads/sync/upstream
+            BODY=$(printf 'Merge of `%s@%s` has conflicts (markers committed on this branch). Resolve, then merge into main.\n\nFiles:\n%s\n' "$UP" "$DEF" "$(echo "$CONFLICTS" | sed 's/^/- `/; s/$/`/')")
+            if gh pr view sync/upstream --json state -q .state 2>/dev/null | grep -q OPEN; then
+              gh pr edit sync/upstream --body "$BODY"
+            else
+              gh pr create --base main --head sync/upstream --title "Sync upstream (conflicts)" --body "$BODY"
+            fi
+            exit 1
+          fi
